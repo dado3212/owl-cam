@@ -50,6 +50,16 @@
     background: #0a0908;
   }
 
+  #streamTruncation {
+    height: calc(min(95vw, 1280px) * 606 / 1080);
+    position: relative;
+  }
+
+  #streamTruncation img {
+    position: absolute;
+    bottom: 0px;
+  }
+
   .stream-wrap img {
     width: 100%;
     display: block;
@@ -168,7 +178,7 @@ function checkStatus() {
         text.textContent = 'Live — ' + data.clients + ' watching — uptime ' + uptimeStr;
 
         if (!document.getElementById('stream')) {
-          wrap.innerHTML = '<img id="stream" src="/projects/owl-cam/stream" alt="Owl cam live stream">';
+          wrap.innerHTML = '<div id="streamTruncation"><img id="stream" src="/projects/owl-cam/stream" alt="Owl cam live stream"></div>';
         }
       } else {
        markOffline();
