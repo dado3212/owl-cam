@@ -1,0 +1,9 @@
+Require all denied
+
+<Files "index.php">
+    Require all granted
+</Files>
+
+<Files "">
+    Require all granted
+</Files>

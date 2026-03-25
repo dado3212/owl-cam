@@ -11,6 +11,10 @@ The stream will be accessible from the EC2 instance IP if you're using the right
 
 `http://192.168.0.247:8080/stream` in a browser.
 
+## Installation on Router
+
+Port forward to :16146.
+
 ### Debug
 
 You can see logs by filtering to "[OwlCam]" in Console.app with the iPhone physically attached.
