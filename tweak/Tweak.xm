@@ -227,63 +227,65 @@ static void *serverThread(void *arg) {
         NSLog(@"[OwlCam] Server listening on port %d", STREAM_PORT);
 
         while (1) {
-            struct sockaddr_in clientAddr;
-            socklen_t clientLen = sizeof(clientAddr);
-            int newSock = accept(g_serverSocket, (struct sockaddr *)&clientAddr, &clientLen);
-            if (newSock < 0) continue;
+            @autoreleasepool {
+                struct sockaddr_in clientAddr;
+                socklen_t clientLen = sizeof(clientAddr);
+                int newSock = accept(g_serverSocket, (struct sockaddr *)&clientAddr, &clientLen);
+                if (newSock < 0) continue;
 
-            // Only allow EC2 IP
-            struct sockaddr_in allowed;
-            inet_pton(AF_INET, ALLOWED_IP, &allowed.sin_addr);
-            uint32_t clientIP = ntohl(clientAddr.sin_addr.s_addr);
-            BOOL isAllowedIP = (clientAddr.sin_addr.s_addr == allowed.sin_addr.s_addr);
-            BOOL isLocal = (clientIP >> 24 == 192 && (clientIP >> 16 & 0xFF) == 168);  // 192.168.x.x
-            if (!isAllowedIP && !isLocal) {
-                close(newSock);
-                continue;
+                // Only allow EC2 IP
+                struct sockaddr_in allowed;
+                inet_pton(AF_INET, ALLOWED_IP, &allowed.sin_addr);
+                uint32_t clientIP = ntohl(clientAddr.sin_addr.s_addr);
+                BOOL isAllowedIP = (clientAddr.sin_addr.s_addr == allowed.sin_addr.s_addr);
+                BOOL isLocal = (clientIP >> 24 == 192 && (clientIP >> 16 & 0xFF) == 168);  // 192.168.x.x
+                if (!isAllowedIP && !isLocal) {
+                    close(newSock);
+                    continue;
+                }
+
+                // Read HTTP request
+                char buf[512];
+                ssize_t n = recv(newSock, buf, sizeof(buf) - 1, 0);
+                if (n <= 0) { close(newSock); continue; }
+                buf[n] = '\0';
+
+                // Only accept /stream
+                if (strstr(buf, "GET /stream") == NULL && strstr(buf, "GET / ") == NULL) {
+                    const char *resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+                    send(newSock, resp, strlen(resp), 0);
+                    close(newSock);
+                    continue;
+                }
+
+                // Only let you connect if the stream is live
+                if (!isStreamLive()) {
+                    const char *resp = "HTTP/1.1 503 No Stream\r\nContent-Length: 0\r\n\r\n";
+                    send(newSock, resp, strlen(resp), 0);
+                    close(newSock);
+                    continue;
+                }
+
+                // Drop existing client — only one allowed
+                pthread_mutex_lock(&g_clientMutex);
+                if (g_clientConnected) {
+                    NSLog(@"[OwlCam] Dropping old client for new connection");
+                    close(g_clientSocket);
+                }
+                g_clientSocket = newSock;
+                g_clientConnected = YES;
+                pthread_mutex_unlock(&g_clientMutex);
+
+                NSLog(@"[OwlCam] Client connected");
+
+                // Send MJPEG header
+                sendStr(newSock,
+                    @"HTTP/1.1 200 OK\r\n"
+                    @"Content-Type: multipart/x-mixed-replace; boundary=--owlframe\r\n"
+                    @"Cache-Control: no-cache\r\n"
+                    @"Connection: keep-alive\r\n"
+                    @"\r\n");
             }
-
-            // Read HTTP request
-            char buf[512];
-            ssize_t n = recv(newSock, buf, sizeof(buf) - 1, 0);
-            if (n <= 0) { close(newSock); continue; }
-            buf[n] = '\0';
-
-            // Only accept /stream
-            if (strstr(buf, "GET /stream") == NULL && strstr(buf, "GET / ") == NULL) {
-                const char *resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
-                send(newSock, resp, strlen(resp), 0);
-                close(newSock);
-                continue;
-            }
-
-            // Only let you connect if the stream is live
-            if (!isStreamLive()) {
-                const char *resp = "HTTP/1.1 503 No Stream\r\nContent-Length: 0\r\n\r\n";
-                send(newSock, resp, strlen(resp), 0);
-                close(newSock);
-                continue;
-            }
-
-            // Drop existing client — only one allowed
-            pthread_mutex_lock(&g_clientMutex);
-            if (g_clientConnected) {
-                NSLog(@"[OwlCam] Dropping old client for new connection");
-                close(g_clientSocket);
-            }
-            g_clientSocket = newSock;
-            g_clientConnected = YES;
-            pthread_mutex_unlock(&g_clientMutex);
-
-            NSLog(@"[OwlCam] Client connected");
-
-            // Send MJPEG header
-            sendStr(newSock,
-                @"HTTP/1.1 200 OK\r\n"
-                @"Content-Type: multipart/x-mixed-replace; boundary=--owlframe\r\n"
-                @"Cache-Control: no-cache\r\n"
-                @"Connection: keep-alive\r\n"
-                @"\r\n");
         }
     }
     return NULL;
