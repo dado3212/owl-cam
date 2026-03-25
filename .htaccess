@@ -1,9 +1,10 @@
-Require all denied
-
-<Files "index.php">
-    Require all granted
+<Files "relay.py">
+    Require all denied
 </Files>
 
-<Files "">
-    Require all granted
+<Files "README.md">
+    Require all denied
 </Files>
+
+RewriteEngine On
+RewriteRule ^tweak/ - [F]

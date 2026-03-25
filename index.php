@@ -3,6 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="canonical" href="https://alexbeals.com/projects/owl-cam/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://alexbeals.com/projects/owl-cam/">
+<meta property="og:image" content="https://alexbeals.com/projects/owl-cam/assets/owl.png">
+<meta property="og:description" content="Owl camera for the Great Horned owlet living in UNCA's Urban Forest in Asheville">
+<meta name="description" content="Owl camera for the Great Horned owlet living in UNCA's Urban Forest in Asheville">
+</head>
 <title>Owl Cam — Alex Beals</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,300;0,400;0,600;1,300;1,400&display=swap');
@@ -20,7 +27,7 @@
   }
 
   header {
-    padding: 2.5rem 1rem 1rem;
+    padding: 30px 16px 16px;
     text-align: center;
   }
 
@@ -42,7 +49,7 @@
 
   .stream-wrap {
     position: relative;
-    width: min(95vw, 1280px);
+    width: min(95vw, 950px);
     margin: 1.5rem auto;
     border: 1px solid #2a2722;
     border-radius: 3px;
@@ -51,7 +58,7 @@
   }
 
   #streamTruncation {
-    height: calc(min(95vw, 1280px) * 606 / 1080);
+    height: calc(min(95vw, 950px) * 606 / 1080);
     position: relative;
   }
 
@@ -126,15 +133,15 @@
 <header>
   <h1>Owl Cam</h1>
   <p class="subtitle">Juvenile Great Horned Owl in <br />
-    UNCA Asheville's Urban Forest</p>
+    UNCA's Urban Forest in Asheville</p>
 </header>
 
 <div class="stream-wrap" id="wrap">
 </div>
 
 <div class="status">
-  <div class="dot <?php $live ? '' : 'off' ?>" id="dot"></div>
-  <span id="statusText"><?php $live ? "Live — $clients watching" : 'Offline' ?></span>
+  <div class="dot off" id="dot"></div>
+  <span id="statusText">Offline</span>
 </div>
 
 <script>
