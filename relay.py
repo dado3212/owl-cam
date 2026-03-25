@@ -12,7 +12,7 @@ import argparse
 import threading
 import time
 import urllib.request
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 latest_frame = None
 frame_lock = threading.Lock()
@@ -153,4 +153,5 @@ def pull_source():
 threading.Thread(target=pull_source, daemon=True).start()
 
 print(f'[relay] Listening on :16146')
-HTTPServer(('127.0.0.1', 16146), Handler).serve_forever()
+ThreadingHTTPServer(('127.0.0.1', 16146), Handler).serve_forever()
+

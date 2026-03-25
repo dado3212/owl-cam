@@ -20,3 +20,15 @@ Port forward to :16146.
 You can see logs by filtering to "[OwlCam]" in Console.app with the iPhone physically attached.
 
 ## Installation on EC2
+
+In `/etc/apache2/sites-available/alexbeals.com-le-ssl.conf` add in this port forwarding:
+
+```
+  # Proxying for OwlCam
+  ProxyPass /projects/owl-cam/stream http://127.0.0.1:16146/stream timeout=300
+  ProxyPassReverse /projects/owl-cam/stream http://127.0.0.1:16146/stream
+  ProxyPass /projects/owl-cam/status http://127.0.0.1:16146/status
+  ProxyPassReverse /projects/owl-cam/status http://127.0.0.1:16146/status
+```
+
+and restart with `service apache2 restart`.
