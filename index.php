@@ -60,13 +60,13 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    aspect-ratio: 16/9;
     color: #4a453c;
+    height: calc(100vh - 300px);
   }
 
   .offline svg {
-    width: 64px;
-    height: 64px;
+    width: 200px;
+    height: 200px;
     margin-bottom: 1.5rem;
     opacity: 0.3;
   }
@@ -131,18 +131,18 @@
 const dot = document.getElementById('dot');
 const text = document.getElementById('statusText');
 const wrap = document.getElementById('wrap');
+var isOffline = false;
 
 function markOffline() {
+  if (isOffline) return;
+  isOffline = true;
   dot.classList.add('off');
   text.textContent = 'Offline';
 
   wrap.innerHTML = `
     <div class="offline" id="offlineMsg">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-        <path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9-4.03-9-9-9z"/>
-        <circle cx="9" cy="10" r="1.5" fill="currentColor" stroke="none"/>
-        <circle cx="15" cy="10" r="1.5" fill="currentColor" stroke="none"/>
-        <path d="M8 15c1.5 2 6.5 2 8 0" stroke-linecap="round"/>
+      <svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="-5.0 -10.0 110.0 135.0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m28.777 43.418c0.10547-0.75781 1.4727-3.3242 2.2461-3.3945 0.48437-0.042969 7.0977 4.832 8.0977 5.3789-1.6289 6.5469-11.281 4.8828-10.344-1.9844zm65.691-38.289c-5.5156 8.3125-14.43 12.391-22.879 17.027-7.0195-1.8906-14.305-2.8086-21.59-2.7969-7.2852-0.011719-14.57 0.90625-21.59 2.7969-8.4453-4.6367-17.363-8.7148-22.879-17.027-0.625 6.5195 1 13.852 5.9531 18.387l38.512 25.988 38.512-25.988c4.9531-4.5352 6.5781-11.867 5.9531-18.387zm-23.246 38.289c-0.10547-0.75781-1.4727-3.3242-2.2461-3.3945-0.48437-0.042969-7.0977 4.832-8.0977 5.3789 1.6289 6.5469 11.281 4.8828 10.344-1.9844zm0.73047-5.4336c9.6133 10.562-7.6875 22.18-14.051 9.4531l-4.125 2.7695 5.4727 7.1445-9.3203 16.109-9.1836-16.109 5.4727-7.1445-4.125-2.7695c-6.3633 12.727-23.664 1.1055-14.051-9.4531l-9.8711-6.4258c-7.7266 10.504-9.043 24.344-2.9766 35.988 7.0312 13.504 22.293 19.914 34.734 27.32 0.023437-0.011719 0.046874-0.027344 0.066406-0.039063 0.023437 0.011719 0.046875 0.027344 0.066406 0.039063 12.441-7.4023 27.703-13.812 34.734-27.32 6.0664-11.645 4.75-25.484-2.9766-35.988l-9.8711 6.4258z"/>
       </svg>
       <p>The owls are resting</p>
       <p class="sub">Stream is offline — check back soon</p>
@@ -153,7 +153,6 @@ function checkStatus() {
   fetch('/projects/owl-cam/status')
     .then(r => r.json())
     .then(data => {
-      console.log(data);
 
       if (data.live) {
         dot.classList.remove('off');
