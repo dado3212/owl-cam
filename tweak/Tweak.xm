@@ -29,6 +29,8 @@ static pthread_mutex_t g_frameMutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_clientMutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_frameCond = PTHREAD_COND_INITIALIZER;
 
+static dispatch_queue_t g_convertQueue = nil;
+
 static int g_serverSocket = -1;
 static int g_clientSocket = -1;
 static BOOL g_clientConnected = NO;
@@ -37,7 +39,16 @@ static NSData *g_latestJPEG = nil;
 static BOOL g_hasReceivedFrame = NO;
 static uint64_t g_lastFrameTime = 0;
 
-
+// Static buffers — allocated once, reused every frame
+static uint8_t *g_yCopy = NULL;
+static uint8_t *g_uCopy = NULL;
+static uint8_t *g_vCopy = NULL;
+static uint8_t *g_sY = NULL;
+static uint8_t *g_sU = NULL;
+static uint8_t *g_sV = NULL;
+static uint8_t *g_rgbBuf = NULL;
+static int g_allocW = 0;
+static int g_allocH = 0;
 
 // The stream is live if _renderVideoFrame has been hit
 // within the last 10 seconds
@@ -56,13 +67,10 @@ static BOOL isStreamLive(void) {
 
 // We have YUV data as part of the rendering pipeline to the CALayer
 // Convert it to a JPG so that it can be passed to clients
+// Uses an externally provided rgbBuf to avoid per-frame allocation
 static NSData *convertYUVToJPEG(uint8_t *yPlane, uint8_t *uPlane, uint8_t *vPlane,
-                                 int width, int height, float quality) {
-    if (!yPlane || !uPlane || !vPlane || width <= 0 || height <= 0) return nil;
-
-    int rgbSize = width * height * 4;
-    uint8_t *rgbBuf = (uint8_t *)malloc(rgbSize);
-    if (!rgbBuf) return nil;
+                                 int width, int height, uint8_t *rgbBuf, float quality) {
+    if (!yPlane || !uPlane || !vPlane || !rgbBuf || width <= 0 || height <= 0) return nil;
 
     int uvWidth = width / 2;
 
@@ -110,9 +118,8 @@ static NSData *convertYUVToJPEG(uint8_t *yPlane, uint8_t *uPlane, uint8_t *vPlan
     if (cgImage) CGImageRelease(cgImage);
     CGContextRelease(ctx);
     CGColorSpaceRelease(colorSpace);
-    free(rgbBuf);
 
-    return jpegData.length > 0 ? [jpegData copy] : nil;
+    return jpegData.length > 0 ? jpegData : nil;
 }
 
 #pragma mark - Stream Writer
@@ -135,10 +142,10 @@ static BOOL sendStr(int sock, NSString *str) {
 #pragma mark - Writer Thread
 
 static void *writerThread(void *arg) {
-    @autoreleasepool {
-        NSLog(@"[OwlCam] Writer thread started");
+    NSLog(@"[OwlCam] Writer thread started");
 
-        while (1) {
+    while (1) {
+        @autoreleasepool {
             // Wait for a new frame (up to 1 second)
             struct timespec ts;
             clock_gettime(CLOCK_REALTIME, &ts);
@@ -146,7 +153,7 @@ static void *writerThread(void *arg) {
 
             pthread_mutex_lock(&g_frameMutex);
             pthread_cond_timedwait(&g_frameCond, &g_frameMutex, &ts);
-            NSData *jpeg = g_latestJPEG ? [g_latestJPEG copy] : nil;
+            NSData *jpeg = g_latestJPEG;
             pthread_mutex_unlock(&g_frameMutex);
 
             // Check client
@@ -193,7 +200,7 @@ static void *writerThread(void *arg) {
 }
 #pragma mark - HTTP Server
 
-// Server thread to handle 
+// Server thread to handle incoming connections
 static void *serverThread(void *arg) {
     @autoreleasepool {
         g_serverSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -220,63 +227,65 @@ static void *serverThread(void *arg) {
         NSLog(@"[OwlCam] Server listening on port %d", STREAM_PORT);
 
         while (1) {
-            struct sockaddr_in clientAddr;
-            socklen_t clientLen = sizeof(clientAddr);
-            int newSock = accept(g_serverSocket, (struct sockaddr *)&clientAddr, &clientLen);
-            if (newSock < 0) continue;
+            @autoreleasepool {
+                struct sockaddr_in clientAddr;
+                socklen_t clientLen = sizeof(clientAddr);
+                int newSock = accept(g_serverSocket, (struct sockaddr *)&clientAddr, &clientLen);
+                if (newSock < 0) continue;
 
-            // Only allow EC2 IP
-            struct sockaddr_in allowed;
-            inet_pton(AF_INET, ALLOWED_IP, &allowed.sin_addr);
-            uint32_t clientIP = ntohl(clientAddr.sin_addr.s_addr);
-            BOOL isAllowedIP = (clientAddr.sin_addr.s_addr == allowed.sin_addr.s_addr);
-            BOOL isLocal = (clientIP >> 24 == 192 && (clientIP >> 16 & 0xFF) == 168);  // 192.168.x.x
-            if (!isAllowedIP && !isLocal) {
-                close(newSock);
-                continue;
+                // Only allow EC2 IP
+                struct sockaddr_in allowed;
+                inet_pton(AF_INET, ALLOWED_IP, &allowed.sin_addr);
+                uint32_t clientIP = ntohl(clientAddr.sin_addr.s_addr);
+                BOOL isAllowedIP = (clientAddr.sin_addr.s_addr == allowed.sin_addr.s_addr);
+                BOOL isLocal = (clientIP >> 24 == 192 && (clientIP >> 16 & 0xFF) == 168);  // 192.168.x.x
+                if (!isAllowedIP && !isLocal) {
+                    close(newSock);
+                    continue;
+                }
+
+                // Read HTTP request
+                char buf[512];
+                ssize_t n = recv(newSock, buf, sizeof(buf) - 1, 0);
+                if (n <= 0) { close(newSock); continue; }
+                buf[n] = '\0';
+
+                // Only accept /stream
+                if (strstr(buf, "GET /stream") == NULL && strstr(buf, "GET / ") == NULL) {
+                    const char *resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+                    send(newSock, resp, strlen(resp), 0);
+                    close(newSock);
+                    continue;
+                }
+
+                // Only let you connect if the stream is live
+                if (!isStreamLive()) {
+                    const char *resp = "HTTP/1.1 503 No Stream\r\nContent-Length: 0\r\n\r\n";
+                    send(newSock, resp, strlen(resp), 0);
+                    close(newSock);
+                    continue;
+                }
+
+                // Drop existing client — only one allowed
+                pthread_mutex_lock(&g_clientMutex);
+                if (g_clientConnected) {
+                    NSLog(@"[OwlCam] Dropping old client for new connection");
+                    close(g_clientSocket);
+                }
+                g_clientSocket = newSock;
+                g_clientConnected = YES;
+                pthread_mutex_unlock(&g_clientMutex);
+
+                NSLog(@"[OwlCam] Client connected");
+
+                // Send MJPEG header
+                sendStr(newSock,
+                    @"HTTP/1.1 200 OK\r\n"
+                    @"Content-Type: multipart/x-mixed-replace; boundary=--owlframe\r\n"
+                    @"Cache-Control: no-cache\r\n"
+                    @"Connection: keep-alive\r\n"
+                    @"\r\n");
             }
-
-            // Read HTTP request
-            char buf[512];
-            ssize_t n = recv(newSock, buf, sizeof(buf) - 1, 0);
-            if (n <= 0) { close(newSock); continue; }
-            buf[n] = '\0';
-
-            // Only accept /stream
-            if (strstr(buf, "GET /stream") == NULL && strstr(buf, "GET / ") == NULL) {
-                const char *resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
-                send(newSock, resp, strlen(resp), 0);
-                close(newSock);
-                continue;
-            }
-
-            // Only let you connect if the stream is live
-            if (!isStreamLive()) {
-                const char *resp = "HTTP/1.1 503 No Stream\r\nContent-Length: 0\r\n\r\n";
-                send(newSock, resp, strlen(resp), 0);
-                close(newSock);
-                continue;
-            }
-
-            // Drop existing client — only one allowed
-            pthread_mutex_lock(&g_clientMutex);
-            if (g_clientConnected) {
-                NSLog(@"[OwlCam] Dropping old client for new connection");
-                close(g_clientSocket);
-            }
-            g_clientSocket = newSock;
-            g_clientConnected = YES;
-            pthread_mutex_unlock(&g_clientMutex);
-
-            NSLog(@"[OwlCam] Client connected");
-
-            // Send MJPEG header
-            sendStr(newSock,
-                @"HTTP/1.1 200 OK\r\n"
-                @"Content-Type: multipart/x-mixed-replace; boundary=--owlframe\r\n"
-                @"Cache-Control: no-cache\r\n"
-                @"Connection: keep-alive\r\n"
-                @"\r\n");
         }
     }
     return NULL;
@@ -327,53 +336,64 @@ static void *serverThread(void *arg) {
     if (width <= 0 || width > 8192 || height <= 0 || height > 8192) return;
     if (!yPlane || !uPlane || !vPlane) return;
 
-    // Downscale 2x for bandwidth and convert on background queue
-    // Copy the plane data first since the buffer may be reused
+    // Allocate static buffers on first use or size change
+    if (g_allocW != width || g_allocH != height) {
+        free(g_yCopy); free(g_uCopy); free(g_vCopy);
+        free(g_sY); free(g_sU); free(g_sV);
+        free(g_rgbBuf);
+
+        int ySize = width * height;
+        int uvSize = (width / 2) * (height / 2);
+        int outW = width / 2;
+        int outH = height / 2;
+
+        g_yCopy = (uint8_t *)malloc(ySize);
+        g_uCopy = (uint8_t *)malloc(uvSize);
+        g_vCopy = (uint8_t *)malloc(uvSize);
+        g_sY = (uint8_t *)malloc(outW * outH);
+        g_sU = (uint8_t *)malloc((outW / 2) * (outH / 2));
+        g_sV = (uint8_t *)malloc((outW / 2) * (outH / 2));
+        g_rgbBuf = (uint8_t *)malloc(outW * outH * 4);
+        g_allocW = width;
+        g_allocH = height;
+
+        if (!g_yCopy || !g_uCopy || !g_vCopy || !g_sY || !g_sU || !g_sV || !g_rgbBuf) {
+            NSLog(@"[OwlCam] Failed to allocate buffers");
+            return;
+        }
+        NSLog(@"[OwlCam] Allocated buffers for %dx%d", width, height);
+    }
+
+    // Copy plane data (buffer may be reused by renderer)
     int ySize = width * height;
     int uvSize = (width / 2) * (height / 2);
-    uint8_t *yCopy = (uint8_t *)malloc(ySize);
-    uint8_t *uCopy = (uint8_t *)malloc(uvSize);
-    uint8_t *vCopy = (uint8_t *)malloc(uvSize);
-    if (!yCopy || !uCopy || !vCopy) { free(yCopy); free(uCopy); free(vCopy); return; }
-    memcpy(yCopy, yPlane, ySize);
-    memcpy(uCopy, uPlane, uvSize);
-    memcpy(vCopy, vPlane, uvSize);
+    memcpy(g_yCopy, yPlane, ySize);
+    memcpy(g_uCopy, uPlane, uvSize);
+    memcpy(g_vCopy, vPlane, uvSize);
 
     int capturedWidth = width;
     int capturedHeight = height;
 
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    // Convert asynchronously on serial queue (only one at a time)
+    dispatch_async(g_convertQueue, ^{
+        int outW = capturedWidth / 2;
+        int outH = capturedHeight / 2;
+
+        for (int j = 0; j < outH; j++)
+            for (int i = 0; i < outW; i++)
+                g_sY[j * outW + i] = g_yCopy[(j * 2) * capturedWidth + (i * 2)];
+
+        int uvW = capturedWidth / 2;
+        int outUVW = outW / 2;
+        for (int j = 0; j < outH / 2; j++)
+            for (int i = 0; i < outUVW; i++) {
+                g_sU[j * outUVW + i] = g_uCopy[(j * 2) * uvW + (i * 2)];
+                g_sV[j * outUVW + i] = g_vCopy[(j * 2) * uvW + (i * 2)];
+            }
+
         @autoreleasepool {
-            int outW = capturedWidth / 2;
-            int outH = capturedHeight / 2;
-            int outYSize = outW * outH;
-            int outUVSize = (outW / 2) * (outH / 2);
+            NSData *jpeg = convertYUVToJPEG(g_sY, g_sU, g_sV, outW, outH, g_rgbBuf, JPEG_QUALITY);
 
-            uint8_t *sY = (uint8_t *)malloc(outYSize);
-            uint8_t *sU = (uint8_t *)malloc(outUVSize);
-            uint8_t *sV = (uint8_t *)malloc(outUVSize);
-            // Don't keep this data
-            if (!sY || !sU || !sV) { free(sY); free(sU); free(sV); free(yCopy); free(uCopy); free(vCopy); return; }
-
-            for (int j = 0; j < outH; j++)
-                for (int i = 0; i < outW; i++)
-                    sY[j * outW + i] = yCopy[(j * 2) * capturedWidth + (i * 2)];
-
-            int uvW = capturedWidth / 2;
-            int outUVW = outW / 2;
-            for (int j = 0; j < outH / 2; j++)
-                for (int i = 0; i < outUVW; i++) {
-                    sU[j * outUVW + i] = uCopy[(j * 2) * uvW + (i * 2)];
-                    sV[j * outUVW + i] = vCopy[(j * 2) * uvW + (i * 2)];
-                }
-
-            free(yCopy); free(uCopy); free(vCopy);
-
-            NSData *jpeg = convertYUVToJPEG(sY, sU, sV, outW, outH, JPEG_QUALITY);
-            free(sY); free(sU); free(sV);
-
-            // Take the copied jpeg and announce to the writer thread that
-            // it should push it
             if (jpeg) {
                 pthread_mutex_lock(&g_frameMutex);
                 g_latestJPEG = jpeg;
@@ -391,6 +411,8 @@ static void *serverThread(void *arg) {
 // the right URL and are from the right IP address)
 %ctor {
     NSLog(@"[OwlCam] Loaded - server starting on port %d", STREAM_PORT);
+
+    g_convertQueue = dispatch_queue_create("com.hackingdartmouth.owlcam-convert", DISPATCH_QUEUE_SERIAL);
 
     pthread_t serverTid;
     pthread_create(&serverTid, NULL, serverThread, NULL);
