@@ -23,6 +23,7 @@
 #define JPEG_QUALITY 0.6
 #define FRAME_INTERVAL_MS 250  // ~4fps
 #define ALLOWED_IP "35.167.183.221" // Amazon EC2
+#define TOP_CROP 90 // must be even
 
 // --- Globals ---
 static pthread_mutex_t g_frameMutex = PTHREAD_MUTEX_INITIALIZER;
@@ -328,15 +329,22 @@ static void *serverThread(void *arg) {
     uint8_t *yPlane = *(uint8_t **)((uint8_t *)frame + FRAME_Y_OFFSET);
     uint8_t *uPlane = *(uint8_t **)((uint8_t *)frame + FRAME_U_OFFSET);
     uint8_t *vPlane = *(uint8_t **)((uint8_t *)frame + FRAME_V_OFFSET);
-    int width  = *(int *)((uint8_t *)frame + FRAME_W_OFFSET);
-    int height = *(int *)((uint8_t *)frame + FRAME_H_OFFSET);
+    int width  = *(int *)((uint8_t *)frame + FRAME_W_OFFSET); // 2560
+    int height = *(int *)((uint8_t *)frame + FRAME_H_OFFSET); // 2880
 
     // Sanity check to ensure the data is what we expect and that we didn't
     // misread
-    if (width <= 0 || width > 8192 || height <= 0 || height > 8192) return;
+    if (width <= 0 || width > 4096 || height <= 0 || height > 4096) return;
     if (!yPlane || !uPlane || !vPlane) return;
 
-    // Allocate static buffers on first use or size change
+    // Composite: the first TOP_CROP pixels from the first image + full bottom image (starts at row 1440)
+    int srcStart2 = height / 2;
+    int srcRows2 = height - srcStart2;
+    int totalSrcRows = TOP_CROP + srcRows2;
+
+    int outW = width / 2;
+    int outH = totalSrcRows / 2;
+
     if (g_allocW != width || g_allocH != height) {
         free(g_yCopy); free(g_uCopy); free(g_vCopy);
         free(g_sY); free(g_sU); free(g_sV);
@@ -344,8 +352,6 @@ static void *serverThread(void *arg) {
 
         int ySize = width * height;
         int uvSize = (width / 2) * (height / 2);
-        int outW = width / 2;
-        int outH = height / 2;
 
         g_yCopy = (uint8_t *)malloc(ySize);
         g_uCopy = (uint8_t *)malloc(uvSize);
@@ -361,10 +367,9 @@ static void *serverThread(void *arg) {
             NSLog(@"[OwlCam] Failed to allocate buffers");
             return;
         }
-        NSLog(@"[OwlCam] Allocated buffers for %dx%d", width, height);
+        NSLog(@"[OwlCam] Allocated buffers for %dx%d -> %dx%d", width, height, outW, outH);
     }
 
-    // Copy plane data (buffer may be reused by renderer)
     int ySize = width * height;
     int uvSize = (width / 2) * (height / 2);
     memcpy(g_yCopy, yPlane, ySize);
@@ -374,25 +379,50 @@ static void *serverThread(void *arg) {
     int capturedWidth = width;
     int capturedHeight = height;
 
-    // Convert asynchronously on serial queue (only one at a time)
     dispatch_async(g_convertQueue, ^{
-        int outW = capturedWidth / 2;
-        int outH = capturedHeight / 2;
+        int half = capturedHeight / 2;  // 1440
+        int compositeH = TOP_CROP + half;    // 1470
+        int dstW = capturedWidth / 2;   // 1280
+        int dstH = compositeH / 2;      // 735
 
-        for (int j = 0; j < outH; j++)
-            for (int i = 0; i < outW; i++)
-                g_sY[j * outW + i] = g_yCopy[(j * 2) * capturedWidth + (i * 2)];
+        // Downsample Y: top rows, then rows 1440–2879
+        int outRow = 0;
+        for (int j = 0; j < TOP_CROP; j += 2) {
+            for (int i = 0; i < dstW; i++)
+                g_sY[outRow * dstW + i] = g_yCopy[j * capturedWidth + (i * 2)];
+            outRow++;
+        }
+        for (int j = half; j < capturedHeight; j += 2) {
+            for (int i = 0; i < dstW; i++)
+                g_sY[outRow * dstW + i] = g_yCopy[j * capturedWidth + (i * 2)];
+            outRow++;
+        }
 
+        // Downsample UV
         int uvW = capturedWidth / 2;
-        int outUVW = outW / 2;
-        for (int j = 0; j < outH / 2; j++)
-            for (int i = 0; i < outUVW; i++) {
-                g_sU[j * outUVW + i] = g_uCopy[(j * 2) * uvW + (i * 2)];
-                g_sV[j * outUVW + i] = g_vCopy[(j * 2) * uvW + (i * 2)];
+        int dstUVW = dstW / 2;
+        int uvTop = TOP_CROP / 2;
+        int uvHalf = half / 2;
+        int uvTotal = capturedHeight / 2;
+        int outUVRow = 0;
+
+        for (int j = 0; j < uvTop; j += 2) {
+            for (int i = 0; i < dstUVW; i++) {
+                g_sU[outUVRow * dstUVW + i] = g_uCopy[j * uvW + (i * 2)];
+                g_sV[outUVRow * dstUVW + i] = g_vCopy[j * uvW + (i * 2)];
             }
+            outUVRow++;
+        }
+        for (int j = uvHalf; j < uvTotal; j += 2) {
+            for (int i = 0; i < dstUVW; i++) {
+                g_sU[outUVRow * dstUVW + i] = g_uCopy[j * uvW + (i * 2)];
+                g_sV[outUVRow * dstUVW + i] = g_vCopy[j * uvW + (i * 2)];
+            }
+            outUVRow++;
+        }
 
         @autoreleasepool {
-            NSData *jpeg = convertYUVToJPEG(g_sY, g_sU, g_sV, outW, outH, g_rgbBuf, JPEG_QUALITY);
+            NSData *jpeg = convertYUVToJPEG(g_sY, g_sU, g_sV, dstW, dstH, g_rgbBuf, JPEG_QUALITY);
 
             if (jpeg) {
                 pthread_mutex_lock(&g_frameMutex);
