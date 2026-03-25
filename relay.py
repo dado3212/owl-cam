@@ -20,7 +20,7 @@ source_connected = False
 client_count = 0
 client_lock = threading.Lock()
 frame_event = threading.Event()
-
+source_connected_since = None
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
@@ -35,11 +35,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def handle_status(self):
-        global client_count, source_connected
+        global client_count, source_connected, source_connected_since
         with client_lock:
             cc = client_count
-        body = '{{"live":{},"clients":{}}}'.format(
-            'true' if source_connected else 'false', cc
+        uptime = int(time.time() - source_connected_since) if source_connected_since else 0
+        body = '{{"live":{},"clients":{},"uptime":{}}}'.format(
+            'true' if source_connected else 'false', cc, uptime
         ).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
@@ -96,12 +97,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def pull_source():
-    global latest_frame, source_connected
+    global latest_frame, source_connected, source_connected_since
 
     while True:
         try:
             resp = urllib.request.urlopen('http://76.102.101.255:16146/stream', timeout=30)
             source_connected = True
+            source_connected_since = time.time()
 
             buf = b''
             while True:
@@ -148,6 +150,7 @@ def pull_source():
             print(f'[relay] Source error: {e}')
 
         source_connected = False
+        source_connected_since = None
         time.sleep(5)
 
 threading.Thread(target=pull_source, daemon=True).start()

@@ -32,3 +32,28 @@ In `/etc/apache2/sites-available/alexbeals.com-le-ssl.conf` add in this port for
 ```
 
 and restart with `service apache2 restart`.
+
+And then set up relay.py to run automatically with:
+
+```
+sudo tee /etc/systemd/system/owlcam.service << 'EOF'
+[Unit]
+Description=OwlCam Relay
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /var/www/alexbeals.com/public_html/projects/owl-cam/relay.py
+Restart=always
+RestartSec=5
+User=ubuntu
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+Enable it.
+```
+sudo systemctl daemon-reload
+sudo systemctl enable owlcam
+sudo systemctl start owlcam
+```

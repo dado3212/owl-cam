@@ -1,14 +1,3 @@
-<?php
-// Fetch status from relay
-$status = @file_get_contents('http://127.0.0.1:16146/status');
-$live = false;
-$clients = 0;
-if ($status) {
-    $data = json_decode($status, true);
-    $live = $data['live'] ?? false;
-    $clients = $data['clients'] ?? 0;
-}
-?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -120,98 +109,78 @@ if ($status) {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
   }
-
-  footer {
-    margin-top: auto;
-    padding: 2rem 1rem;
-    text-align: center;
-    font-size: 0.8rem;
-    color: #3a362f;
-  }
-
-  footer a {
-    color: #6b6458;
-    text-decoration: none;
-  }
-
-  footer a:hover {
-    color: #b8a978;
-  }
 </style>
 </head>
 <body>
 
 <header>
   <h1>Owl Cam</h1>
-  <p class="subtitle">A quiet watch</p>
+  <p class="subtitle">Juvenile Great Horned Owl in <br />
+    UNCA Asheville's Urban Forest</p>
 </header>
 
 <div class="stream-wrap" id="wrap">
-<?php if ($live): ?>
-  <img id="stream" src="/projects/owl-cam/stream" alt="Owl cam live stream">
-<?php else: ?>
-  <div class="offline" id="offlineMsg">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-      <path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9-4.03-9-9-9z"/>
-      <circle cx="9" cy="10" r="1.5" fill="currentColor" stroke="none"/>
-      <circle cx="15" cy="10" r="1.5" fill="currentColor" stroke="none"/>
-      <path d="M8 15c1.5 2 6.5 2 8 0" stroke-linecap="round"/>
-    </svg>
-    <p>The owls are resting</p>
-    <p class="sub">Stream is offline — check back soon</p>
-  </div>
-<?php endif; ?>
 </div>
 
 <div class="status">
-  <div class="dot <?= $live ? '' : 'off' ?>" id="dot"></div>
-  <span id="statusText"><?= $live ? "Live — $clients watching" : 'Offline' ?></span>
+  <div class="dot <?php $live ? '' : 'off' ?>" id="dot"></div>
+  <span id="statusText"><?php $live ? "Live — $clients watching" : 'Offline' ?></span>
 </div>
 
-<footer>
-  <a href="/projects">alexbeals.com</a>
-</footer>
-
 <script>
+const dot = document.getElementById('dot');
+const text = document.getElementById('statusText');
+const wrap = document.getElementById('wrap');
+
+function markOffline() {
+  dot.classList.add('off');
+  text.textContent = 'Offline';
+
+  wrap.innerHTML = `
+    <div class="offline" id="offlineMsg">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9-4.03-9-9-9z"/>
+        <circle cx="9" cy="10" r="1.5" fill="currentColor" stroke="none"/>
+        <circle cx="15" cy="10" r="1.5" fill="currentColor" stroke="none"/>
+        <path d="M8 15c1.5 2 6.5 2 8 0" stroke-linecap="round"/>
+      </svg>
+      <p>The owls are resting</p>
+      <p class="sub">Stream is offline — check back soon</p>
+    </div>`;
+}
+
 function checkStatus() {
   fetch('/projects/owl-cam/status')
     .then(r => r.json())
     .then(data => {
-      const dot = document.getElementById('dot');
-      const text = document.getElementById('statusText');
-      const wrap = document.getElementById('wrap');
+      console.log(data);
 
       if (data.live) {
         dot.classList.remove('off');
-        text.textContent = 'Live — ' + data.clients + ' watching';
+        var parts = [];
+        var s = data.uptime;
+        var d = Math.floor(s / 86400); s %= 86400;
+        var h = Math.floor(s / 3600); s %= 3600;
+        var m = Math.floor(s / 60);
+        if (d > 0) parts.push(d + 'd');
+        if (h > 0) parts.push(h + 'h');
+        parts.push(m + 'm');
+        var uptimeStr = parts.join(' ');
+        text.textContent = 'Live — ' + data.clients + ' watching — uptime ' + uptimeStr;
 
-        // If we were offline, add the stream img
         if (!document.getElementById('stream')) {
           wrap.innerHTML = '<img id="stream" src="/projects/owl-cam/stream" alt="Owl cam live stream">';
         }
       } else {
-        dot.classList.add('off');
-        text.textContent = 'Offline';
-
-        // Show offline message if stream was showing
-        if (document.getElementById('stream')) {
-          wrap.innerHTML = `
-            <div class="offline" id="offlineMsg">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9-4.03-9-9-9z"/>
-                <circle cx="9" cy="10" r="1.5" fill="currentColor" stroke="none"/>
-                <circle cx="15" cy="10" r="1.5" fill="currentColor" stroke="none"/>
-                <path d="M8 15c1.5 2 6.5 2 8 0" stroke-linecap="round"/>
-              </svg>
-              <p>The owls are resting</p>
-              <p class="sub">Stream is offline — check back soon</p>
-            </div>`;
-        }
+       markOffline();
       }
     })
-    .catch(() => {});
+    .catch(() => {
+      markOffline();
+    });
 }
 
+checkStatus();
 setInterval(checkStatus, 5000);
 </script>
 </body>
