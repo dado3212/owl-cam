@@ -2,6 +2,8 @@
 
 Stream a NiView security camera to the web from a jailbroken iPhone.
 
+<img src="/assets/owl.png?raw=true" width="450px" alt=""/>
+
 ## Installation on iPhone
 Update Makefile with the correct `PHONE = mobile@192.168.0.247` and then run `make deploy`.
 
