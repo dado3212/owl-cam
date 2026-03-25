@@ -1,0 +1,9 @@
+Package: com.hackingdartmouth.owlcam
+Name: OwlCam
+Depends: mobilesubstrate, firmware (>= 15.0)
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: Streams NiView camera video as MJPEG over HTTP
+Maintainer: Alex Beals
+Author: Alex Beals
+Section: Tweaks
